@@ -18,8 +18,13 @@
 
 package com.kteq.flink;
 
+import java.util.Arrays;
 import java.util.Properties;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -45,13 +50,30 @@ public class StreamingJob {
 
 
         DataStream<String> tweetsAsStrings = env.addSource(twitterSource);
-
         //tweetsAsStrings.print();
 
 
-        DataStream<Status> tweets = tweetsAsStrings.flatMap(new TweetsParser());;
+        DataStream<Status> tweets = tweetsAsStrings.flatMap(new TweetsParser());
+        //tweets.print();
 
-        tweets.print();
+
+        DataStream<Tuple2<String, Status>>
+                classifiedTweets = tweets.flatMap(new TweetsPerSearchCriteria());
+
+
+        //Stampa Tag, id_tweet, lista hashtags e mentions.
+        classifiedTweets.map(new MapFunction<Tuple2<String, Status>, String>() {
+            @Override
+            public String map(Tuple2<String, Status> value) throws Exception {
+                return value.f0 + " -> " + value.f1.getId() + " " +
+                        "[" +
+                        Stream.concat(
+                                Arrays.stream(value.f1.getHashtagEntities()).map(e -> "#" + e.getText()),
+                                Arrays.stream(value.f1.getUserMentionEntities()).map(e -> "@" + e.getText())
+                        ).collect(Collectors.joining(",")) +
+                        "]";
+            }
+        }).print();
 
 
         // execute program
