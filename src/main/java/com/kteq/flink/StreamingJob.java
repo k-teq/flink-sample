@@ -19,16 +19,19 @@
 package com.kteq.flink;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.streaming.api.datastream.ConnectedStreams;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.co.CoFlatMapFunction;
+import org.apache.flink.streaming.api.functions.co.CoMapFunction;
 import org.apache.flink.streaming.connectors.twitter.TwitterSource;
+import org.apache.flink.util.Collector;
 
 import twitter4j.Status;
 
@@ -60,20 +63,56 @@ public class StreamingJob {
         DataStream<Tuple2<String, Status>>
                 classifiedTweets = tweets.flatMap(new TweetsPerSearchCriteria());
 
+        //tweets.print();
 
-        //Stampa Tag, id_tweet, lista hashtags e mentions.
-        classifiedTweets.map(new MapFunction<Tuple2<String, Status>, String>() {
+//        //Stampa Tag, id_tweet, lista hashtags e mentions.
+//        classifiedTweets.map(new MapFunction<Tuple2<String, Status>, String>() {
+//            @Override
+//            public String map(Tuple2<String, Status> value) throws Exception {
+//                return value.f0 + " -> " + value.f1.getId() + " " +
+//                        "[" +
+//                        Stream.concat(
+//                                Arrays.stream(value.f1.getHashtagEntities()).map(e -> "#" + e.getText()),
+//                                Arrays.stream(value.f1.getUserMentionEntities()).map(e -> "@" + e.getText())
+//                        ).collect(Collectors.joining(",")) +
+//                        "]";
+//            }
+//        }).print();
+
+        //Source che prende i dati dal topic "topic" della coda Apache Kafka configurata come da "properties"
+        //durante lo sviluppo e' torppo laborioso gestire la Kafka attiva quindi usiamo una lista di
+        //stringhe statiche.
+        //FlinkKafkaConsumer011<String> kafkaConsumer
+        //        = new FlinkKafkaConsumer011<>("topic", new SimpleStringSchema(), parameters.getProperties());
+
+        List<String> subscriptions = Arrays.asList("Alberto,+,#HR", "Francesca,+,#Job", "Alberto,+,@DemGovs");
+        DataStream<String> configurationsAsStrings = env.fromCollection(subscriptions);
+        DataStream<Tuple3<String, String, String>> configurations = configurationsAsStrings.map(new SubsriptionsParser());
+
+
+        ConnectedStreams<Tuple2<String, Status>, Tuple3<String, String, String>>
+                tweetsAndConfigurations = classifiedTweets.connect(configurations);
+
+
+        //processa i due stream accoppiati e stampa un messaggio identificativo
+        //in entrambe le map.
+        tweetsAndConfigurations.map(new CoMapFunction<Tuple2<String,Status>, Tuple3<String,String,String>, String>() {
+
+
             @Override
-            public String map(Tuple2<String, Status> value) throws Exception {
-                return value.f0 + " -> " + value.f1.getId() + " " +
-                        "[" +
-                        Stream.concat(
-                                Arrays.stream(value.f1.getHashtagEntities()).map(e -> "#" + e.getText()),
-                                Arrays.stream(value.f1.getUserMentionEntities()).map(e -> "@" + e.getText())
-                        ).collect(Collectors.joining(",")) +
-                        "]";
+            public String map1(Tuple2<String, Status> value) throws Exception {
+                return "Map1, processing Tweet id: " + value.f1.getId() + ", relative to searchCriteria: " + value.f0;
+            }
+
+            @Override
+            public String map2(Tuple3<String, String, String> value) throws Exception {
+                return "Map2, processing subscription od " + value.f2 + ", relative to searchCriteria: " + value.f0;
             }
         }).print();
+
+
+
+
 
 
         // execute program
