@@ -22,16 +22,14 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 
+import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.datastream.ConnectedStreams;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.co.CoFlatMapFunction;
-import org.apache.flink.streaming.api.functions.co.CoMapFunction;
 import org.apache.flink.streaming.connectors.twitter.TwitterSource;
-import org.apache.flink.util.Collector;
 
 import twitter4j.Status;
 
@@ -85,7 +83,13 @@ public class StreamingJob {
         //FlinkKafkaConsumer011<String> kafkaConsumer
         //        = new FlinkKafkaConsumer011<>("topic", new SimpleStringSchema(), parameters.getProperties());
 
-        List<String> subscriptions = Arrays.asList("Alberto,+,#HR", "Francesca,+,#Job", "Alberto,+,@DemGovs");
+        List<String> subscriptions = Arrays.asList(
+                "Alberto,+,#HR",
+                "Francesca,+,#IDOLCHALLENGE",
+                "Francesca,+,#IDOLChallenge",
+                "Francesca,+,#IDOL",
+                "Alberto,+,#IDOL");
+
         DataStream<String> configurationsAsStrings = env.fromCollection(subscriptions);
         DataStream<Tuple3<String, String, String>> configurations = configurationsAsStrings.map(new SubsriptionsParser());
 
@@ -94,28 +98,50 @@ public class StreamingJob {
                 tweetsAndConfigurations = classifiedTweets.connect(configurations);
 
 
+        //partition the stream using a key extractor,
+        //elements with the same key will be processed in the same partition
+        ConnectedStreams<Tuple2<String, Status>, Tuple3<String, String, String>> keyedTweetsAndConfigurations =
+                tweetsAndConfigurations.keyBy(
+                        new KeySelector<Tuple2<String, Status>, String>() {
+                            @Override
+                            public String getKey(Tuple2<String, Status> value) throws Exception {
+                                return value.f0;
+                            }
+                        },
+                        new KeySelector<Tuple3<String, String, String>, String>() {
+                            @Override
+                            public String getKey(Tuple3<String, String, String> value) throws Exception {
+                                return value.f0;
+                            }
+                        }
+                );
+
+
+//        //processa i due stream accoppiati e stampa un messaggio identificativo
+//        //in entrambe le map.
+//        keyedTweetsAndConfigurations.map(new CoMapFunction<Tuple2<String, Status>, Tuple3<String, String, String>, String>() {
+//
+//
+//            @Override
+//            public String map1(Tuple2<String, Status> value) throws Exception {
+//                return "Map1, processing Tweet id: " + value.f1.getId() + ", relative to searchCriteria: " + value.f0;
+//            }
+//
+//            @Override
+//            public String map2(Tuple3<String, String, String> value) throws Exception {
+//                return "Map2, processing subscription of " + value.f2 + ", relative to searchCriteria: " + value.f0;
+//            }
+//        }).print();
+
+
         //processa i due stream accoppiati e stampa un messaggio identificativo
         //in entrambe le map.
-        tweetsAndConfigurations.map(new CoMapFunction<Tuple2<String,Status>, Tuple3<String,String,String>, String>() {
-
-
-            @Override
-            public String map1(Tuple2<String, Status> value) throws Exception {
-                return "Map1, processing Tweet id: " + value.f1.getId() + ", relative to searchCriteria: " + value.f0;
-            }
-
-            @Override
-            public String map2(Tuple3<String, String, String> value) throws Exception {
-                return "Map2, processing subscription od " + value.f2 + ", relative to searchCriteria: " + value.f0;
-            }
-        }).print();
-
-
-
-
+        //ritorna la statistica, la key  e tutte le subscriptions per successive elaborazioni
+        keyedTweetsAndConfigurations.flatMap(new Aggregator()).print();
 
 
         // execute program
         env.execute("Mokabyte Flink Streaming Example");
     }
+
 }
