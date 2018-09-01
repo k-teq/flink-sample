@@ -64,10 +64,7 @@ class Aggregator extends RichCoFlatMapFunction<Tuple2<String, Status>, Tuple3<St
         //emit stat iff there are subscriptions
         if (currentSubscriptions != null && currentSubscriptions.size() > 0)
             collector.collect(new Tuple3<>(value.f0, currentSubscriptions, new Statistic(count)));
-        else
-            //eventually in a real application use a Logger
-            System.out.println("SearchCriteria: " + value.f0 + " without subscriptions");
-    }
+     }
 
     @Override
     public void flatMap2(Tuple3<String, String, String> value,

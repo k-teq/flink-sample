@@ -21,14 +21,18 @@ package com.kteq.flink;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.datastream.ConnectedStreams;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
 import org.apache.flink.streaming.connectors.twitter.TwitterSource;
 
 import twitter4j.Status;
@@ -36,6 +40,7 @@ import twitter4j.Status;
 public class StreamingJob {
 
     public static void main(String[] args) throws Exception {
+
         // set up the streaming execution environment
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
@@ -43,63 +48,35 @@ public class StreamingJob {
         ParameterTool commandlineParameters = ParameterTool.fromArgs(args);
         String configuarationsFile = commandlineParameters.get("configFile", "application.properties");
         ParameterTool parameters = ParameterTool.fromPropertiesFile(configuarationsFile);
-
-
         Properties properties = parameters.getProperties();
 
+        //legge i Tweet come stringhe
         TwitterSource twitterSource = new TwitterSource(properties);
-
-
         DataStream<String> tweetsAsStrings = env.addSource(twitterSource);
-        //tweetsAsStrings.print();
 
-
+        //Trasforma le stringhe in twttt4j.Status
         DataStream<Status> tweets = tweetsAsStrings.flatMap(new TweetsParser());
-        //tweets.print();
 
-
+        //organizza i tweet per search criteria
         DataStream<Tuple2<String, Status>>
                 classifiedTweets = tweets.flatMap(new TweetsPerSearchCriteria());
 
-        //tweets.print();
+        //legge da kafka le 'subscruptions'
+        FlinkKafkaConsumer010<String> kafkaConsumer
+                = new FlinkKafkaConsumer010<>(Arrays.asList(parameters.get("topic")),
+                new SimpleStringSchema(), parameters.getProperties());
+        DataStream<String> configurationsAsStrings = env.addSource(kafkaConsumer);
 
-//        //Stampa Tag, id_tweet, lista hashtags e mentions.
-//        classifiedTweets.map(new MapFunction<Tuple2<String, Status>, String>() {
-//            @Override
-//            public String map(Tuple2<String, Status> value) throws Exception {
-//                return value.f0 + " -> " + value.f1.getId() + " " +
-//                        "[" +
-//                        Stream.concat(
-//                                Arrays.stream(value.f1.getHashtagEntities()).map(e -> "#" + e.getText()),
-//                                Arrays.stream(value.f1.getUserMentionEntities()).map(e -> "@" + e.getText())
-//                        ).collect(Collectors.joining(",")) +
-//                        "]";
-//            }
-//        }).print();
-
-        //Source che prende i dati dal topic "topic" della coda Apache Kafka configurata come da "properties"
-        //durante lo sviluppo e' torppo laborioso gestire la Kafka attiva quindi usiamo una lista di
-        //stringhe statiche.
-        //FlinkKafkaConsumer011<String> kafkaConsumer
-        //        = new FlinkKafkaConsumer011<>("topic", new SimpleStringSchema(), parameters.getProperties());
-
-        List<String> subscriptions = Arrays.asList(
-                "Alberto,+,#HR",
-                "Francesca,+,#IDOLCHALLENGE",
-                "Francesca,+,#IDOLChallenge",
-                "Francesca,+,#IDOL",
-                "Alberto,+,#IDOL");
-
-        DataStream<String> configurationsAsStrings = env.fromCollection(subscriptions);
+        //preprocessa le stringhe provenienti da kafka
         DataStream<Tuple3<String, String, String>> configurations = configurationsAsStrings.map(new SubsriptionsParser());
 
 
+        //connette i due stream (tweets,subscriptions)
         ConnectedStreams<Tuple2<String, Status>, Tuple3<String, String, String>>
                 tweetsAndConfigurations = classifiedTweets.connect(configurations);
 
 
-        //partition the stream using a key extractor,
-        //elements with the same key will be processed in the same partition
+        //partiziona lo  stream (connected) usando un key extractor.
         ConnectedStreams<Tuple2<String, Status>, Tuple3<String, String, String>> keyedTweetsAndConfigurations =
                 tweetsAndConfigurations.keyBy(
                         new KeySelector<Tuple2<String, Status>, String>() {
@@ -117,27 +94,15 @@ public class StreamingJob {
                 );
 
 
-//        //processa i due stream accoppiati e stampa un messaggio identificativo
-//        //in entrambe le map.
-//        keyedTweetsAndConfigurations.map(new CoMapFunction<Tuple2<String, Status>, Tuple3<String, String, String>, String>() {
-//
-//
-//            @Override
-//            public String map1(Tuple2<String, Status> value) throws Exception {
-//                return "Map1, processing Tweet id: " + value.f1.getId() + ", relative to searchCriteria: " + value.f0;
-//            }
-//
-//            @Override
-//            public String map2(Tuple3<String, String, String> value) throws Exception {
-//                return "Map2, processing subscription of " + value.f2 + ", relative to searchCriteria: " + value.f0;
-//            }
-//        }).print();
-
-
-        //processa i due stream accoppiati e stampa un messaggio identificativo
-        //in entrambe le map.
+        //processa i due stream accoppiati
         //ritorna la statistica, la key  e tutte le subscriptions per successive elaborazioni
-        keyedTweetsAndConfigurations.flatMap(new Aggregator()).print();
+        SingleOutputStreamOperator<Tuple3<String, Set<String>, Statistic>>
+                stats = keyedTweetsAndConfigurations.flatMap(new Aggregator());
+
+
+        //salva le statistiche su jbase
+        stats.writeUsingOutputFormat( new HBaseOutputFormat( properties.getProperty("tableName") ) );
+
 
 
         // execute program
